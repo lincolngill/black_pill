@@ -1,0 +1,3 @@
+/usr/local/bin/st-flash
+${workspace_loc}/${project_name}/Release
+write ${project_name}.binary 0x8000000
