@@ -1,6 +1,13 @@
 // Blackpill: STM32F103C8T6
 /*
- * PB12 --Onboard LED - Flash/sec
+ * PB12 --Onboard LED - Flashes
+ * LCD Refer LCD_HD44780.h/c
+ *   PA6  - E  - Enable
+ *   PA7  - RS - Register Select
+ *   PA8  - D4
+ *   PA9  - D5
+ *   PA10 - D6
+ *   PB15 - D7
  */
 //#include <stdio.h>
 //#include <stdlib.h>
@@ -8,6 +15,7 @@
 
 #include <pt-extended.h>
 #include "stm32f10x.h"
+#include "LCD_HD44780.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -18,21 +26,9 @@
 #define LED_TICK_ON     GPIOB ->BSRR |= GPIO_BSRR_BS12
 #define LED_TICK_OFF    GPIOB ->BRR |= GPIO_BRR_BR12
 
-// SysTick set to increment msticks every ms
-// The IRQ has to be declared as a C function otherwise it does not overwrite the weak version in exception_handlers.c
-#ifdef __cplusplus
-extern "C" {
-#endif
-// ms tick counter. Updated by Systick or TIM ISR
-// Comment out pt_msTicks definition if using pt-extended.h
-//volatile unsigned int pt_msTicks = 0;
-void SysTick_Handler(void)
-{
-  pt_msTicks++; // Protothread ms tick counter
-}
-#ifdef __cplusplus
-}
-#endif
+// Protothread structures
+static struct pt pt_tick, pt_led, pt_lcd;
+static struct pt_sem time_update;
 
 void initialise() {
   // Enable the GPIO clock for Port B
@@ -43,32 +39,54 @@ void initialise() {
   GPIOB->CRH |= GPIO_CRH_MODE12;
   // CNF12=00: General purpose output push-pull
   GPIOB->CRH &= ~(GPIO_CRH_CNF12);
-
-  // Setup SysTick as 1ms timer using CMSIS core routines. ISR Increments pt_milliSec
-  if (SysTick_Config(SystemCoreClock / 1000)) {
-    while (1)
-      LED_TICK_ON; // Capture error
-  }
 }
 
-void msdelay(uint32_t ms) {
-  uint32_t wait_till = pt_msTicks + ms;
-  while (wait_till > pt_msTicks) ;
-}
-
-#define MSDELAY 1000
-int main(int argc, char* argv[]) {
-  int mswait = MSDELAY;
-  if (argc > 1)
-    {
-      // If defined, get the number of loops from the command line,
-      // configurable via semihosting.
-      //mswait = atoi (argv[1]);
-    }
-  initialise();
+// Thread to track seconds elapsed since boot
+static uint32_t running_secs = 0;
+static PT_THREAD (protothread_tick(struct pt *pt)) {
+  PT_BEGIN(pt);
   while (1) {
-      LED_TICK_TOGGLE ;
-      msdelay(mswait);
+    PT_YIELD_TIME_msec(1000);
+    running_secs++;
+    PT_SEM_SIGNAL(pt, &time_update);
+  }
+  PT_END(pt);
+}
+
+// Thread to blink LED
+static PT_THREAD (protothread_led(struct pt *pt)) {
+  PT_BEGIN(pt);
+  while (1) {
+    LED_TICK_TOGGLE;
+    PT_YIELD_TIME_msec(150);
+  }
+  PT_END(pt);
+}
+
+// Thread to update LCD when running_secs changes
+static PT_THREAD (protothread_lcd(struct pt *pt)) {
+  PT_BEGIN(pt);
+  LCD_Init();
+  PT_YIELD(pt);
+  LCD_PrintStr("Boot Time\n");
+  while(1) {
+    LCD_GotoLine2();
+    LCD_Printf("%6d seconds",running_secs);
+    PT_SEM_WAIT(pt, &time_update);
+  }
+  PT_END(pt);
+}
+
+int main(int argc, char* argv[]) {
+  initialise();
+  PT_SETUP();
+  PT_INIT(&pt_tick);
+  PT_INIT(&pt_lcd);
+  PT_INIT(&pt_led);
+  while (1) {
+    PT_SCHEDULE(protothread_tick(&pt_tick));
+    PT_SCHEDULE(protothread_lcd(&pt_lcd));
+    PT_SCHEDULE(protothread_led(&pt_led));
   }
 }
 

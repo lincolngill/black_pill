@@ -1,255 +1,233 @@
-/**
-  ******************************************************************************
-  * @file    HD44780.c
-  * @author  MCD Application Team
-  * @version V1.0.0
-  * @date    16_January-2012
-  * @brief   HD44780.c
-  * originally developed for STM8s
-  *
-  * adapted by JC Toussaint Phelma Grenoble-INP for STM32
-  * @date    18_February-2018
-  ******************************************************************************
-  * @attention
-  *
-  * THE PRESENT FIRMWARE WHICH IS FOR GUIDANCE ONLY AIMS AT PROVIDING CUSTOMERS
-  * WITH CODING INFORMATION REGARDING THEIR PRODUCTS IN ORDER FOR THEM TO SAVE
-  * TIME. AS A RESULT, STMICROELECTRONICS SHALL NOT BE HELD LIABLE FOR ANY
-  * DIRECT, INDIRECT OR CONSEQUENTIAL DAMAGES WITH RESPECT TO ANY CLAIMS ARISING
-  * FROM THE CONTENT OF SUCH FIRMWARE AND/OR THE USE MADE BY CUSTOMERS OF THE
-  * CODING INFORMATION CONTAINED HEREIN IN CONNECTION WITH THEIR PRODUCTS.
-  *
-  * FOR MORE INFORMATION PLEASE READ CAREFULLY THE LICENSE AGREEMENT FILE
-  * LOCATED IN THE ROOT DIRECTORY OF THIS FIRMWARE PACKAGE.
-  *
-  * <h2><center>&copy; COPYRIGHT 2011 STMicroelectronics</center></h2>
-  ******************************************************************************
-  */
-
-/* Includes ------------------------------------------------------------------*/
-#include "main.h"
-#include "stm32l4xx_hal.h"
+/* HD44780 LCD Driver
+ *
+ * */
 #include <stdarg.h>
 #include <stdio.h>
-#include <HD44780.h>
+#include <LCD_HD44780.h>
+#include "pt-extended.h"
 
-uint16_t GPIO_ReadOutputData (GPIO_TypeDef *GPIOx){
-	return GPIOx->ODR;
-}
+void LCD_ConfigPins(void) {
+  // Enable the GPIO clock for Port A & B
+  RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
+  RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
 
-void GPIO_Write (GPIO_TypeDef *GPIOx, uint16_t PortVal){
-	GPIOx->ODR=PortVal;
+  //*** Make sure the R/W LCD Pin is connected to GND. I.e. Write Mode
+  // Pins 8-12, 15 Output MODE=11: 50 MHz. CNF8=00: General purpose output push-pull
+  GPIOA->CRH |= GPIO_CRH_MODE8;   // D4 PA8 CRH
+  GPIOA->CRH &= ~(GPIO_CRH_CNF8);
+  GPIOA->CRH |= GPIO_CRH_MODE9;   // D5 PA9 CRH
+  GPIOA->CRH &= ~(GPIO_CRH_CNF9);
+  GPIOA->CRH |= GPIO_CRH_MODE10;  // D6 PA10 CRH
+  GPIOA->CRH &= ~(GPIO_CRH_CNF10);
+  GPIOB->CRH |= GPIO_CRH_MODE15;  // D7 PB15 CRH
+  GPIOB->CRH &= ~(GPIO_CRH_CNF15);
+  GPIOB->CRL |= GPIO_CRL_MODE6;  // Enable PB6 CRL
+  GPIOB->CRL &= ~(GPIO_CRL_CNF6);
+  GPIOB->CRL |= GPIO_CRL_MODE7;  // RS PB7 CRL
+  GPIOB->CRL &= ~(GPIO_CRL_CNF7);
 }
 
 /**
-  * @brief  Initializes Character Generator CGRAM with custom characters data
-  * @param  Table containing characters definition values
-  * @param  Number of characters defined in the table
-  * @retval None
-  */
-void LCD_LOAD_CGRAM(char tab[], uint8_t charnum)
-{
-  uint8_t index;
-  /* Each character contains 8 definition values*/
-  charnum = charnum * 8;
-  for (index = 0;index < charnum;index++)
-  {
-    /* Store values in LCD*/
-    LCD_printchar(tab[index]);
-    HAL_Delay(1);
-  }
+ * @brief Reads the LCDs 4 data pins and stitches together a 4-bit data value
+ * @return 4-bit data value
+ */
+uint32_t LCD_Read4BitData(void) {
+  return
+     (LCD_D4_PORT ->ODR & LCD_D4_PIN) +
+    ((LCD_D5_PORT ->ODR & LCD_D5_PIN)<<1) +
+    ((LCD_D6_PORT ->ODR & LCD_D6_PIN)<<2) +
+    ((LCD_D7_PORT ->ODR & LCD_D7_PIN)<<3);
+}
+
+/**
+ * @brief Writes the LCDs 4-bit data
+ * @param 4-bit data value
+ */
+void LCD_Write4BitData(uint8_t data) {
+  (data & 0b0001) ? LCD_SET_PIN(LCD_D4_PORT,LCD_D4_PIN) : LCD_RESET_PIN(LCD_D4_PORT,LCD_D4_PIN);
+  (data & 0b0010) ? LCD_SET_PIN(LCD_D5_PORT,LCD_D5_PIN) : LCD_RESET_PIN(LCD_D5_PORT,LCD_D5_PIN);
+  (data & 0b0100) ? LCD_SET_PIN(LCD_D6_PORT,LCD_D6_PIN) : LCD_RESET_PIN(LCD_D6_PORT,LCD_D6_PIN);
+  (data & 0b1000) ? LCD_SET_PIN(LCD_D7_PORT,LCD_D7_PIN) : LCD_RESET_PIN(LCD_D7_PORT,LCD_D7_PIN);
+}
+
+// TODO: Change this to a more accurate delay
+void LCD_Delay(uint32_t ms) {
+  uint32_t wait_till = pt_msTicks + ms;
+  while (wait_till > pt_msTicks) ;
 }
 
 /**
   * @brief  Activate Enable Pin from LCD module
-  * @param  None
-  * @param  None
-  * @retval None
   */
-void LCD_ENABLE (void)
+void LCD_Enable (void)
 {
-  HAL_GPIO_WritePin(LCDControlPort, LCD_Enable_Pin, GPIO_PIN_SET);
-  HAL_Delay(2);
-  HAL_GPIO_WritePin(LCDControlPort, LCD_Enable_Pin, GPIO_PIN_RESET);
+  LCD_SET_ENABLE ;
+  LCD_Delay(2);
+  LCD_RESET_ENABLE ;
 }
 
 /**
   * @brief  Command data sent to LCD module
   * @param  command value to be sent
-  * @param  None
-  * @retval None
   */
-void LCD_CMD(unsigned char cmd_data)
+void LCD_Cmd(uint8_t cmd_data)
 {
-  HAL_GPIO_WritePin(LCDControlPort, LCD_RS, GPIO_PIN_RESET);
-
-  /*
-   * When the I/O port is programmed as output
-   * a read access to the output data register gets the last written value.
-   */
-  GPIO_Write(LCDPort, (GPIO_ReadOutputData(LCDPort) & 0xF0) | ((cmd_data >> 4) & 0x0F));
-  LCD_ENABLE();
-  GPIO_Write(LCDPort, (GPIO_ReadOutputData(LCDPort) & 0xF0) | (cmd_data & 0x0F));
-  LCD_ENABLE();
-  HAL_Delay(2);
+  LCD_RESET_RS ;
+  LCD_Write4BitData( (cmd_data>>4) & 0x0F );
+  LCD_Enable();
+  LCD_Write4BitData( cmd_data & 0x0F );
+  LCD_Enable();
+  LCD_Delay(2);
 }
 
 /**
   * @brief  Clear LCD module display
-  * @param  None
-  * @param  None
-  * @retval None
   */
-void LCD_CLEAR_DISPLAY(void)
+void LCD_ClearDisplay(void)
 {
-  LCD_CMD(0x01);
-  HAL_Delay(2);
+  LCD_Cmd(0x01);
+  LCD_Delay(2);
 }
 
-/**
-  * @brief  Initializes HD44780 LCD module in 4-bit mode
-  * @param  None
-  * @param  None
-  * @retval None
-  */
-void LCD_INIT(void)
+void LCD_Init(void)
 {
-  HAL_GPIO_WritePin(LCDControlPort, LCD_Enable_Pin, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(LCDControlPort, LCD_RS, GPIO_PIN_RESET);
+  LCD_ConfigPins();
+
+  LCD_RESET_ENABLE;
+  LCD_RESET_RS;
   //Initialization of HD44780-based LCD (4-bit HW)
-  LCD_CMD(0x33);
-  HAL_Delay(4);
-  LCD_CMD(0x32);
-  HAL_Delay(4);
+  // 0011 0011 Function set: D[4..5]=11 twice. DL=1 8-bit mode
+  LCD_Cmd(0x33);
+  LCD_Delay(4);
+  // 0011 0010 Function set: D[4..5]=11 DL=1, then D[4..5]=10 DL=0 4-bit mode
+  LCD_Cmd(0x32);
+  LCD_Delay(4);
   //Function Set 4-bit mode
-  LCD_CMD(0x28);
+  // 0010 1000 Function set DL=0 4-bit, N=1 2-line, F=0 5x8 dots
+  LCD_Cmd(0x28);
   //Display On/Off Control
-  LCD_CMD(0x0C);
+  // 0000 1100 Display ON/OFF D=1 Display ON, C=0 Cursor OFF, B=0 Cursor blink OFF
+  LCD_Cmd(0x0C);
   //Entry mode set
-  LCD_CMD(0x06);
-  LCD_CLEAR_DISPLAY();
+  // 0000 0110 Entry Mode
+  // I/D=1 Cursor/blink moves right & DDRAM addr inc
+  // SH=0 Display shift OFF
+  LCD_Cmd(0x06);
+  LCD_ClearDisplay();
   //Minimum delay to wait before driving LCD module
-  HAL_Delay(200);
+  LCD_Delay(200);
 }
 
 /**
   * @brief  Set Cursor on second row 1st digit
-  * @param  None
-  * @param  None
-  * @retval None
   */
-void LCD_2ndROW(void)
+void LCD_GotoLine2(void)
 {
-  LCD_CMD(0xC0);
+  // 1100 0000 Set DDRAM Addr AC6=1 AC[5..0]=0. Addr=0100 000 = 0x40
+  // When N=1 2-line
+  //   Line1: 0x00 - 0x27
+  //   Line2: 0x40 - 0x67
+  LCD_Cmd(0xC0);
 }
 
 /**
   * @brief  Set Cursor to Home position
-  * @param  None
-  * @param  None
-  * @retval None
   */
-void LCD_HOME(void)
+void LCD_Home(void)
 {
-  LCD_CMD(0x02);
-  HAL_Delay(2);
+  // Return Home
+  LCD_Cmd(0x02);
+  LCD_Delay(2);
 }
 
 /**
   * @brief  Shift display to left
-  * @param  None
-  * @param  None
-  * @retval None
   */
-void LCD_LSHIFT(void)
+void LCD_LShift(void)
 {
-  LCD_CMD(0x18);
+  // 0001 1000 Cursor or display shift
+  // S/C=1 Display & Cursor (When S/C=0 only cursor is shifted)
+  // R/L=0 Left
+  LCD_Cmd(0x18);
 }
 
 /**
   * @brief  Shift display to right
   * @param  Text to be displayed
-  * @param  None
-  * @retval None
   */
-void LCD_RSHIFT(void)
+void LCD_RShift(void)
 {
-  LCD_CMD(0x1C);
+  // 0001 1100 Cursor or display shift
+  // S/C=1 Display & Cursor (When S/C=0 only cursor is shifted)
+  // R/L=1 Right
+  LCD_Cmd(0x1C);
 }
 
 /**
   * @brief  Set Display On
-  * @param  None
-  * @param  None
-  * @retval None
   */
-void LCD_DISP_ON(void)
+void LCD_DisplayOn(void)
 {
-  LCD_CMD(0x0C);
+  // 0000 1100 Display ON/OFF
+  // D=1 Display ON
+  // C=0 Cursor OFF
+  // B=0 Cursor Blinking OFF
+  LCD_Cmd(0x0C);
 }
 
 /**
   * @brief  Set Display Off
-  * @param  None
-  * @param  None
-  * @retval None
   */
-void LCD_DISP_OFF(void)
+void LCD_DisplayOff(void)
 {
-  LCD_CMD(0x08);
+  // 0000 1000 Display ON/OFF
+  // D=0 Display OFF
+  // C=0 Cursor OFF
+  // B=0 Cursor Blinking OFF
+  LCD_Cmd(0x08);
 }
 
 /**
   * @brief  Set Cursor to a specified location given by row and column information
   * @param  Row Number (1 to 2)
   * @param  Column Number (1 to 16) Assuming a 2 X 16 characters display
-  * @retval None
   */
-void LCD_LOCATE(uint8_t row, uint8_t column)
+void LCD_Locate(uint8_t row, uint8_t column)
 {
   column--;
-  switch (row)
-  {
-    case 1:
-      /* Set cursor to 1st row address and add index*/
-      LCD_CMD(column |= 0x80);
-      break;
-    case 2:
-      /* Set cursor to 2nd row address and add index*/
-      LCD_CMD(column |= 0x40 | 0x80);
-      break;
-    default:
-      break;
+  if (row == 1) {
+      // 1nnn nnnn Set DDRAM Addr
+      LCD_Cmd(column |= 0x80);
+  }
+  if (row == 2) {
+      // 11nn nnnn Line 2
+      LCD_Cmd(column |= 0x40 | 0x80);
   }
 }
 
 /**
   * @brief  Print Character on LCD module
   * @param  Ascii value of character
-  * @param  None
-  * @retval None
   */
-void LCD_printchar(unsigned char ascode)
+void LCD_PrintChar(char ascode)
 {
-  HAL_GPIO_WritePin(LCDControlPort, LCD_RS, GPIO_PIN_SET);
-  GPIO_Write(LCDPort, (GPIO_ReadOutputData(LCDPort) & 0xF0) | ((ascode >> 4) & 0x0F));
-  LCD_ENABLE();
-  GPIO_Write(LCDPort, (GPIO_ReadOutputData(LCDPort) & 0xF0) | (ascode & 0x0F));
-  LCD_ENABLE();
-  HAL_Delay(2);
+  LCD_SET_RS ;
+  LCD_Write4BitData( (ascode>>4) & 0x0F );
+  LCD_Enable();
+  LCD_Write4BitData( ascode & 0x0F );
+  LCD_Enable();
+  LCD_Delay(2);
 }
 
 /**
   * @brief  Display of a characters string
   * @param  Text to be displayed
-  * @param  None
-  * @retval None
   */
-void LCD_printstring(char *text)
+void LCD_PrintStr(char *text)
 {
   do
   {
-    LCD_printchar(*text++);
+    LCD_PrintChar(*text++);
   }
   while (*text != '\n');
 }
@@ -257,10 +235,8 @@ void LCD_printstring(char *text)
 /**
   * @brief  lcd printf function
   * @param  string with standard defined formats
-  * @param
-  * @retval None
   */
-void LCD_printf(const char *fmt, ...)
+void LCD_Printf(const char *fmt, ...)
 {
   uint32_t i;
   uint32_t text_size, letter;
@@ -280,7 +256,7 @@ void LCD_printf(const char *fmt, ...)
     else
     {
       if ((letter > 0x1F) && (letter < 0x80))
-        LCD_printchar(letter);
+        LCD_PrintChar(letter);
     }
   }
 }

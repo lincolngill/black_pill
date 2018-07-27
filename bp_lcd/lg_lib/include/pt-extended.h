@@ -12,6 +12,7 @@
 #include "pt.h"                         // Original Protothread library
 #include "pt-sem.h"                     // Original Protothread semaphore library
 
+
 // Yield for a set delay in ms.
 // pt_msTicks must be incremented by a timer ISR. E.g. SysTick
 extern volatile unsigned int pt_msTicks;
@@ -22,6 +23,8 @@ extern volatile unsigned int pt_msTicks;
    } while(0);
 
 #define PT_GET_TIME() (pt_msTicks)
+
+void PT_SETUP(void);
 
 #ifdef __cplusplus
 }
