@@ -10,22 +10,22 @@
 /* LCD HW settings */
 // 4-bit data
 // *** These must be 5v tolerant pins
-#define LCD_D4_PIN  GPIO_Pin_8
+#define LCD_D4_PIN  8
 #define LCD_D4_PORT GPIOA
-#define LCD_D5_PIN  GPIO_Pin_9
+#define LCD_D5_PIN  9
 #define LCD_D5_PORT GPIOA
-#define LCD_D6_PIN  GPIO_Pin_10
+#define LCD_D6_PIN  10
 #define LCD_D6_PORT GPIOA
-#define LCD_D7_PIN  GPIO_Pin_15
+#define LCD_D7_PIN  15
 #define LCD_D7_PORT GPIOB
 
-#define LCD_ENABLE_PIN  GPIO_Pin_6
+#define LCD_ENABLE_PIN  6
 #define LCD_ENABLE_PORT GPIOB
-#define LCD_RS_PIN      GPIO_Pin_7
+#define LCD_RS_PIN      7
 #define LCD_RS_PORT     GPIOB
 
-#define LCD_SET_PIN(GPIOx,Pinx)    (GPIOx->BSRR |= Pinx)
-#define LCD_RESET_PIN(GPIOx,Pinx)  (GPIOx->BRR |= Pinx)
+#define LCD_SET_PIN(GPIOx,Pinx)    (GPIOx->BSRR |= 1<<Pinx)
+#define LCD_RESET_PIN(GPIOx,Pinx)  (GPIOx->BRR |= 1<<Pinx)
 
 #define LCD_SET_RS       LCD_SET_PIN(LCD_RS_PORT,LCD_RS_PIN)
 #define LCD_RESET_RS     LCD_RESET_PIN(LCD_RS_PORT,LCD_RS_PIN)
@@ -34,6 +34,7 @@
 
 #define LCD_CGRAM_ADDR 0x40
 
+void _ConfigPin(GPIO_TypeDef * port, uint8_t pin, uint8_t cnf_and_mode);
 void LCD_ConfigPins(void);
 uint32_t LCD_Read4BitData(void);
 void LCD_Write4BitData(uint8_t data);

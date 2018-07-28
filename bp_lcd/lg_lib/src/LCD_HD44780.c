@@ -6,25 +6,49 @@
 #include <LCD_HD44780.h>
 #include "pt-extended.h"
 
-void LCD_ConfigPins(void) {
-  // Enable the GPIO clock for Port A & B
-  RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
-  RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
+/**
+ * @brief Configure a GPIO pin's MODE and CNF and enable the port clock
+ * @param GPIO port. E.g. GPIOA
+ * @param Pin number: 0-15
+ * @param CNF[1:0] and MODE[1:0] as 4-bit number. E.g. 0b0011 (CNF=00 MODE=11)
+ */
+void _ConfigPin(GPIO_TypeDef * port, uint8_t pin, uint8_t cnf_and_mode) {
+  uint32_t pin_mask;
+  volatile uint32_t * cr_reg;
 
-  //*** Make sure the R/W LCD Pin is connected to GND. I.e. Write Mode
-  // Pins 8-12, 15 Output MODE=11: 50 MHz. CNF8=00: General purpose output push-pull
-  GPIOA->CRH |= GPIO_CRH_MODE8;   // D4 PA8 CRH
-  GPIOA->CRH &= ~(GPIO_CRH_CNF8);
-  GPIOA->CRH |= GPIO_CRH_MODE9;   // D5 PA9 CRH
-  GPIOA->CRH &= ~(GPIO_CRH_CNF9);
-  GPIOA->CRH |= GPIO_CRH_MODE10;  // D6 PA10 CRH
-  GPIOA->CRH &= ~(GPIO_CRH_CNF10);
-  GPIOB->CRH |= GPIO_CRH_MODE15;  // D7 PB15 CRH
-  GPIOB->CRH &= ~(GPIO_CRH_CNF15);
-  GPIOB->CRL |= GPIO_CRL_MODE6;  // Enable PB6 CRL
-  GPIOB->CRL &= ~(GPIO_CRL_CNF6);
-  GPIOB->CRL |= GPIO_CRL_MODE7;  // RS PB7 CRL
-  GPIOB->CRL &= ~(GPIO_CRL_CNF7);
+  // Enable the port clock
+  if (port == GPIOA) RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
+  if (port == GPIOB) RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
+
+  // Determine if we need CRL or CRH reg and calculate the location mask for the pins MODE[0] bit
+  if (pin < 8) {
+      cr_reg = &(port->CRL);                  // Need to use CRL
+      pin_mask = (uint32_t) (1<<(pin*4));     // CRL MODE[0] mask for pin
+  } else {
+      cr_reg = &(port->CRH);                  // Need to use CRH
+      pin_mask = (uint32_t) (1<<((pin-8)*4)); // CRH MODE[0] mask for pin
+  }
+
+  // Set or Reset CNF[1:0]MODE[1:0]
+  for (int i=0; i<4; i++) {
+      (cnf_and_mode & 1<<i) ? (*cr_reg |= pin_mask<<i) : (*cr_reg &= ~(pin_mask<<i)) ;
+  }
+}
+
+/**
+ * @brief Configure the LCD Pins for output
+ */
+void LCD_ConfigPins(void) {
+  // Config pins
+  // CNF[1:0]=01  - General purpose output Open-drain
+  // MODE[1:0]=11 - 50 MHz
+  _ConfigPin(LCD_D4_PORT,     LCD_D4_PIN,     0b0111);
+  _ConfigPin(LCD_D5_PORT,     LCD_D5_PIN,     0b0111);
+  _ConfigPin(LCD_D6_PORT,     LCD_D6_PIN,     0b0111);
+  _ConfigPin(LCD_D7_PORT,     LCD_D7_PIN,     0b0111);
+  // CNF[1:0]=00  - General purpose output Push-pull
+  _ConfigPin(LCD_ENABLE_PORT, LCD_ENABLE_PIN, 0b0011);
+  _ConfigPin(LCD_RS_PORT,     LCD_RS_PIN,     0b0011);
 }
 
 /**
@@ -33,10 +57,10 @@ void LCD_ConfigPins(void) {
  */
 uint32_t LCD_Read4BitData(void) {
   return
-     (LCD_D4_PORT ->ODR & LCD_D4_PIN) +
-    ((LCD_D5_PORT ->ODR & LCD_D5_PIN)<<1) +
-    ((LCD_D6_PORT ->ODR & LCD_D6_PIN)<<2) +
-    ((LCD_D7_PORT ->ODR & LCD_D7_PIN)<<3);
+     (LCD_D4_PORT ->ODR & 1<<LCD_D4_PIN) +
+    ((LCD_D5_PORT ->ODR & 1<<LCD_D5_PIN)<<1) +
+    ((LCD_D6_PORT ->ODR & 1<<LCD_D6_PIN)<<2) +
+    ((LCD_D7_PORT ->ODR & 1<<LCD_D7_PIN)<<3);
 }
 
 /**
@@ -238,8 +262,9 @@ void LCD_PrintStr(char *text)
   */
 void LCD_Printf(const char *fmt, ...)
 {
-  uint32_t i;
-  uint32_t text_size, letter;
+  //uint32_t i;
+  int i, text_size;
+  char letter;
   static char text_buffer[32];
   va_list args;
 
@@ -255,7 +280,8 @@ void LCD_Printf(const char *fmt, ...)
       break;
     else
     {
-      if ((letter > 0x1F) && (letter < 0x80))
+      //if ((letter > 0x1F) && (letter < 0x80))
+      if ((letter > 0x1F))
         LCD_PrintChar(letter);
     }
   }
