@@ -1,9 +1,9 @@
 #ifndef __LCD_HD44780
 #define __LCD_HD44780
 
-#ifdef __cplusplus
- extern "C" {
-#endif
+//#ifdef __cplusplus
+// extern "C" {
+//#endif
 
 #include "stm32f10x.h"
 
@@ -34,6 +34,32 @@
 
 #define LCD_CGRAM_ADDR 0x40
 
+class Lcd {
+    void configPin (GPIO_TypeDef * port, uint8_t pin, uint8_t cnf_and_mode);
+    void configPins (void);
+    uint32_t read4BitData (void);
+    void write4BitData (uint8_t data);
+    void delay (uint32_t ms);
+    void enable (void);
+    void cmd (uint8_t cmd_data);
+  public:
+    static struct pt_sem ready_sem, send_sem;
+    void clearDisplay (void);
+    void init (void);
+    void gotoLine2 (void);
+    void home (void);
+    void lShift (void);
+    void rShift (void);
+    void displayOn (void);
+    void displayOff (void);
+    void locate (uint8_t row, uint8_t column);
+    void printChar (char ascode);
+    void printStr (const char *text);
+    void printf (const char *fmt, ...);
+    static char (protothread(struct pt *pt, Lcd l));
+};
+
+/*
 void _ConfigPin(GPIO_TypeDef * port, uint8_t pin, uint8_t cnf_and_mode);
 void LCD_ConfigPins(void);
 uint32_t LCD_Read4BitData(void);
@@ -53,9 +79,10 @@ void LCD_Locate(uint8_t row, uint8_t column);
 void LCD_PrintChar(char ascode);
 void LCD_PrintStr(const char *text);
 void LCD_Printf(const char *fmt, ...);
+*/
 
-#ifdef __cplusplus
-}
-#endif
+//#ifdef __cplusplus
+//}
+//#endif
 
 #endif //__LCD_HD44780

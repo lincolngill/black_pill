@@ -247,13 +247,13 @@ void LCD_PrintChar(char ascode)
   * @brief  Display of a characters string
   * @param  Text to be displayed
   */
-void LCD_PrintStr(char *text)
+void LCD_PrintStr(const char *text)
 {
   do
   {
     LCD_PrintChar(*text++);
   }
-  while (*text != '\n');
+  while (*text);
 }
 
 /**

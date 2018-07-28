@@ -12,17 +12,15 @@
 //#include <stdio.h>
 //#include <stdlib.h>
 //#include "diag/Trace.h"
-
-#include <pt-extended.h>
+#include <Lcd.h>
 #include "stm32f10x.h"
-#include "LCD_HD44780.h"
+#include "pt-extended.h"
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wmissing-declarations"
 #pragma GCC diagnostic ignored "-Wreturn-type"
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough="
-
 #define LED_TICK_TOGGLE GPIOB ->ODR ^= (1<<12)
 #define LED_TICK_ON     GPIOB ->BSRR |= GPIO_BSRR_BS12
 #define LED_TICK_OFF    GPIOB ->BRR |= GPIO_BRR_BR12
@@ -30,6 +28,7 @@
 // Protothread structures
 static struct pt pt_tick, pt_led, pt_lcd;
 static struct pt_sem time_update;
+Lcd lcd;
 
 void initialise() {
   // Enable the GPIO clock for Port B
@@ -67,12 +66,12 @@ static PT_THREAD (protothread_led(struct pt *pt)) {
 // Thread to update LCD when running_secs changes
 static PT_THREAD (protothread_lcd(struct pt *pt)) {
   PT_BEGIN(pt);
-  LCD_Init();
+  lcd.init();
   PT_YIELD(pt);
-  LCD_PrintStr("Boot Time");
+  lcd.printStr("Boot Time");
   while(1) {
-    LCD_GotoLine2();
-    LCD_Printf("%6d seconds",running_secs);
+    lcd.gotoLine2();
+    lcd.printf("%6d seconds",running_secs);
     PT_SEM_WAIT(pt, &time_update);
   }
   PT_END(pt);
@@ -86,7 +85,7 @@ int main(int argc, char* argv[]) {
   PT_INIT(&pt_led);
   while (1) {
     PT_SCHEDULE(protothread_tick(&pt_tick));
-    PT_SCHEDULE(protothread_lcd(&pt_lcd));
+    PT_SCHEDULE(Lcd::protothread(&pt_lcd, lcd));
     PT_SCHEDULE(protothread_led(&pt_led));
   }
 }
