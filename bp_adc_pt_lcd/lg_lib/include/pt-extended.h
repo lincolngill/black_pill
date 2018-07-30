@@ -16,7 +16,7 @@
 // Yield for a set delay in ms.
 // pt_msTicks must be incremented by a timer ISR. E.g. SysTick
 extern volatile unsigned int pt_msTicks;
-#define PT_YIELD_TIME_msec(delay_time) \
+#define PT_YIELD_TIME_msec(pt, delay_time) \
    do { static unsigned int time_thread; \
    time_thread = pt_msTicks + (unsigned int)delay_time; \
    PT_YIELD_UNTIL(pt, pt_msTicks >= time_thread); \
