@@ -1,7 +1,7 @@
 // Blackpill: STM32F103C8T6
 /*
  * PB12 --Onboard LED - Flashes
- * LCD Refer LCD_HD44780.h/c
+ * LCD Refer LCD.h/c
  *   PA6  - E  - Enable
  *   PA7  - RS - Register Select
  *   PA8  - D4
@@ -9,8 +9,8 @@
  *   PA10 - D6
  *   PB15 - D7
  */
-//#include <stdio.h>
-//#include <stdlib.h>
+#define VERSION 4
+
 //#include "diag/Trace.h"
 #include <LCD.h>
 #include "stm32f10x.h"
@@ -31,6 +31,9 @@
 static struct pt pt_tick, pt_led, pt_lcd_driver;
 static struct pt_sem time_update;
 
+/**
+ * Initialise Pins - PB12 LED pin
+ */
 void initialise() {
   // Enable the GPIO clock for Port B
   RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
@@ -42,8 +45,14 @@ void initialise() {
   GPIOB->CRH &= ~(GPIO_CRH_CNF12);
 }
 
-// Thread to track seconds elapsed since boot
+/**
+ * Seconds since boot
+ */
 static uint32_t running_secs = 0;
+/**
+ * Thread to increment running_secs every second
+ * \param[in] pt protothread pointer
+ */
 static PT_THREAD (protothread_tick(struct pt *pt)) {
   PT_BEGIN(pt);
   while (1) {
@@ -54,7 +63,10 @@ static PT_THREAD (protothread_tick(struct pt *pt)) {
   PT_END(pt);
 }
 
-// Thread to blink LED
+/**
+ * Thread to toggle the LED
+ * \param[in] pt protothread pointer
+ */
 static PT_THREAD (protothread_led(struct pt *pt)) {
   PT_BEGIN(pt);
   while (1) {
@@ -64,13 +76,23 @@ static PT_THREAD (protothread_led(struct pt *pt)) {
   PT_END(pt);
 }
 
-
-// Thread to update LCD when running_secs changes
+/**
+ * Thread to driver LCD output
+ * \param[in] pt protothread pointer
+ *
+ * Updates LCD with running_secs
+ */
 static PT_THREAD (protothread_lcd(struct pt *pt)) {
   PT_BEGIN(pt);
   static char text_buffer[32];
+  static char date[] = __DATE__;
   PT_LCD_INIT(pt);
-  PT_LCD_PRINTSTR(pt,"v3.0 Boot Time:");
+  //PT_LCD_PRINTSTR(pt,"v3.0 Boot Time:");
+  //sprintf(text_buffer, "v%d BootTime:", VERSION);
+  // Line 1 = Compile time
+  date[6]=0;
+  sprintf(text_buffer, "%s %s", date, __TIME__);
+  PT_LCD_PRINTSTR(pt,text_buffer);
   while(1) {
     PT_LCD_2NDLINE(pt);
     sprintf(text_buffer, "%6d seconds",running_secs);
@@ -86,6 +108,7 @@ int main(int argc, char* argv[]) {
   PT_INIT(&pt_tick);
   PT_INIT(&pt_lcd_driver);
   PT_INIT(&pt_led);
+  // Schedule threads
   while (1) {
     PT_SCHEDULE(protothread_tick(&pt_tick));
     PT_SCHEDULE(protothread_lcd(&pt_lcd_driver));
