@@ -27,6 +27,13 @@ extern volatile unsigned int pt_msTicks;
 void PT_SETUP(void);
 void SysTick_Handler(void);
 
+#define PT_SEM_SET(s) (s)->count=1
+#define PT_SEM_CLEAR(s) (s)->count=0
+#define PT_SEM_READ(s) (s)->count
+#define PT_SEM_ACCEPT(s) \
+  s->count; \
+  if (s->count) s->count-- ; \
+
 #ifdef __cplusplus
 }
 #endif
