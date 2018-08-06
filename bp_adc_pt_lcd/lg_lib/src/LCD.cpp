@@ -4,6 +4,7 @@
 #pragma GCC diagnostic ignored "-Wimplicit-fallthrough="
 
 #include <LCD.h>
+#include <Pin.h>
 
 /**
  * \namespace lcd
@@ -11,67 +12,14 @@
  */
 namespace lcd {
 
-  /**
-   * Configure a GPIO pin's MODE and CNF and enable the port clock
-   * \param[in] port         GPIO port. E.g. GPIOA
-   * \param[in] pin          Pin number: 0-15
-   * \param[in] cnf_and_mode CNF[1:0] and MODE[1:0] as 4-bit number. E.g. 0b0011 (CNF=00 MODE=11)
-   */
-  void
-  configPin (GPIO_TypeDef * port, uint8_t pin, uint8_t cnf_and_mode) {
-    uint32_t pin_mask;
-    volatile uint32_t * cr_reg;
-
-    // Enable the port clock
-    if (port == GPIOA)
-      RCC->APB2ENR |= RCC_APB2ENR_IOPAEN;
-    if (port == GPIOB)
-      RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
-
-    // Determine if we need CRL or CRH reg and calculate the location mask for the pins MODE[0] bit
-    if (pin < 8) {
-      cr_reg = &(port->CRL);                  // Need to use CRL
-      pin_mask = (uint32_t) (1 << (pin * 4)); // CRL MODE[0] mask for pin
-    } else {
-      cr_reg = &(port->CRH);                        // Need to use CRH
-      pin_mask = (uint32_t) (1 << ((pin - 8) * 4)); // CRH MODE[0] mask for pin
-    }
-
-    // Set or Reset CNF[1:0]MODE[1:0]
-    for (int i = 0; i < 4; i++) {
-      (cnf_and_mode & 1 << i) ?
-          (*cr_reg |= pin_mask << i) : (*cr_reg &= ~(pin_mask << i));
-    }
-  }
-
-  /**
-   * Configure the LCD Pins for output
-   */
-  void
-  configPins (void) {
-    // Config pins
-    // CNF[1:0]=01  - General purpose output Open-drain
-    // MODE[1:0]=11 - 50 MHz
-    configPin (LCD_D4_PORT, LCD_D4_PIN, 0b0111);
-    configPin (LCD_D5_PORT, LCD_D5_PIN, 0b0111);
-    configPin (LCD_D6_PORT, LCD_D6_PIN, 0b0111);
-    configPin (LCD_D7_PORT, LCD_D7_PIN, 0b0111);
-    // CNF[1:0]=00  - General purpose output Push-pull
-    configPin (LCD_ENABLE_PORT, LCD_ENABLE_PIN, 0b0011);
-    configPin (LCD_RS_PORT, LCD_RS_PIN, 0b0011);
-  }
-
-  /**
-   * Reads the output register bits for pins D[4:7] and stitches together a 4-bit data value
-   * \return 4-bit data value
-   */
-  uint32_t
-  read4BitData (void) {
-    return (LCD_D4_PORT->ODR & 1 << LCD_D4_PIN)
-        + ((LCD_D5_PORT->ODR & 1 << LCD_D5_PIN) << 1)
-        + ((LCD_D6_PORT->ODR & 1 << LCD_D6_PIN) << 2)
-        + ((LCD_D7_PORT->ODR & 1 << LCD_D7_PIN) << 3);
-  }
+  Pin data_pins[4] = {
+    Pin(LCD_D4_PORT, LCD_D4_PIN, PIN_OPENDRAIN_OUTPUT_50),
+    Pin(LCD_D5_PORT, LCD_D5_PIN, PIN_OPENDRAIN_OUTPUT_50),
+    Pin(LCD_D6_PORT, LCD_D6_PIN, PIN_OPENDRAIN_OUTPUT_50),
+    Pin(LCD_D7_PORT, LCD_D7_PIN, PIN_OPENDRAIN_OUTPUT_50)
+  };
+  Pin enable_pin(LCD_ENABLE_PORT, LCD_ENABLE_PIN, PIN_PUSHPULL_OUTPUT_50);
+  Pin rs_pin(LCD_RS_PORT, LCD_RS_PIN, PIN_PUSHPULL_OUTPUT_50);
 
   /**
    * Writes the LCDs 4-bit data to D[4:7] pins
@@ -79,18 +27,9 @@ namespace lcd {
    */
   void
   write4BitData (uint8_t data) {
-    (data & 0b0001) ?
-        LCD_SET_PIN(LCD_D4_PORT, LCD_D4_PIN) :
-        LCD_RESET_PIN(LCD_D4_PORT, LCD_D4_PIN);
-    (data & 0b0010) ?
-        LCD_SET_PIN(LCD_D5_PORT, LCD_D5_PIN) :
-        LCD_RESET_PIN(LCD_D5_PORT, LCD_D5_PIN);
-    (data & 0b0100) ?
-        LCD_SET_PIN(LCD_D6_PORT, LCD_D6_PIN) :
-        LCD_RESET_PIN(LCD_D6_PORT, LCD_D6_PIN);
-    (data & 0b1000) ?
-        LCD_SET_PIN(LCD_D7_PORT, LCD_D7_PIN) :
-        LCD_RESET_PIN(LCD_D7_PORT, LCD_D7_PIN);
+    for (uint8_t i=0; i<4; i++) {
+      (data & 1<<i) ? data_pins[i].set() : data_pins[i].reset();
+    }
   }
 
   /**
@@ -103,19 +42,19 @@ namespace lcd {
   PT_THREAD (send(struct pt *pt, uint8_t byte_to_send, uint8_t rs, uint8_t post_delay)) {
     PT_BEGIN(pt);
     // Register Select
-    (rs == LCD_RS_CMD) ? LCD_RESET_RS : LCD_SET_RS ;
+    (rs == LCD_RS_CMD) ? rs_pin.reset() : rs_pin.set() ;
     // Send high order 4-bits
     write4BitData ((byte_to_send >> 4) & 0x0F);
     // Enable sequence
-    LCD_SET_ENABLE;
+    enable_pin.set();
     PT_YIELD_TIME_msec(pt, 2);
-    LCD_RESET_ENABLE;
+    enable_pin.reset();
     // Send low order 4-bits
     write4BitData (byte_to_send & 0x0F);
     // Enable sequence
-    LCD_SET_ENABLE;
+    enable_pin.set();
     PT_YIELD_TIME_msec(pt, 2);
-    LCD_RESET_ENABLE;
+    enable_pin.reset();
     // Post enable wait: min 2ms + post_delay (ms)
     PT_YIELD_TIME_msec(pt, 2+post_delay);
     PT_END(pt);
@@ -127,9 +66,8 @@ namespace lcd {
    */
   PT_THREAD (init(struct pt *pt)) {
     PT_BEGIN(pt);
-    configPins ();
-    LCD_RESET_ENABLE;
-    LCD_RESET_RS;
+    enable_pin.reset();
+    rs_pin.reset();
     //Initialization of HD44780-based LCD (4-bit HW)
     // 0011 0011 Function set: D[4..5]=11 twice. DL=1 8-bit mode
     PT_SPAWN(pt, &pt_send, send(&pt_send,0x33,LCD_RS_CMD,4));

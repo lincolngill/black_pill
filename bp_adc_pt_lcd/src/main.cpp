@@ -1,16 +1,25 @@
 
 // Blackpill: STM32F103C8T6
 /*
+ * Position a Servo using PWM output, based on analog input from a 10k pot
+ *
  * PB12 --Onboard LED - Flashes
- * LCD Refer LCD.h/c
+ * LCD Refer LCD.h/c - Protothread enabled LCD library
  *   PA6  - E  - Enable
  *   PA7  - RS - Register Select
  *   PA8  - D4
  *   PA9  - D5
  *   PA10 - D6
  *   PB15 - D7
+ *
+ *   PA0 - Analog input <- 10k pot
+ *   PA1 - TIM2 OC2 (T2C2) output. 20Hz PWM Servo control
+ *
+ *   TIM1 - Setup for 10Hz to trigger ADC1 every 100ms
+ *   TIM2 - Setup for 50Hz PWM servo output. Pulse = 0.5ms..2.5ms
+ *
  */
-#define VERSION 6
+#define VERSION 10
 
 //#include "diag/Trace.h"
 #include <LCD.h>
@@ -18,7 +27,7 @@
 #include "stm32f10x.h"
 #include "pt-extended.h"
 #include <stdio.h>
-#include <time.h>
+//#include <time.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -75,13 +84,14 @@ static PT_THREAD (protothread_led(struct pt *pt)) {
  * \param[in] pt protothread pointer
  *
  * Updates LCD with ADC reading & running_secs
+ * One thread must do all the LCD output. The LCD library has a single pt structure for each of its PT_THREAD functions.
  */
 static PT_THREAD (protothread_lcd(struct pt *pt)) {
   PT_BEGIN(pt);
   static char text_buffer[32];
   static char date[] = __DATE__;
-  static time_t seconds;
-  static tm *p;
+  //static time_t seconds;
+  //static tm *p;
   PT_LCD_INIT(pt);
   // Display Compile time
   sprintf(text_buffer, "v%d Compiled", VERSION);
@@ -91,27 +101,27 @@ static PT_THREAD (protothread_lcd(struct pt *pt)) {
   sprintf(text_buffer, "%s %s", date, __TIME__);
   PT_LCD_PRINTSTR(pt,text_buffer);
   PT_YIELD_TIME_msec(pt,2000);
-  // Display Running seconds
+  // Display ADC reading, Calculated CCR2 value and running seconds
   PT_LCD_CLEARDISPLAY(pt);
   PT_LCD_PRINTSTR(pt,"ADC1:");
   while(1) {
     PT_LCD_2NDLINE(pt);
-    //sprintf(text_buffer, "%8d seconds",running_secs);
     //seconds = running_secs;
     //p = gmtime(&seconds);
     //sprintf(text_buffer, "%03d %02d:%02d:%02d",p->tm_yday, p->tm_hour, p->tm_min, p->tm_sec);
     sprintf(text_buffer, "%4d %4d %5ds", analog1, t2_compare, running_secs);
     PT_LCD_PRINTSTR(pt, text_buffer);
-    //PT_SEM_WAIT(pt, &time_update);
     // Wait for reading out of band or update in time
+    //PT_SEM_WAIT(pt, &time_update);
     PT_WAIT_UNTIL(pt, analog_reading < analog1-ADC_TOLERANCE || analog_reading > analog1+ADC_TOLERANCE || PT_SEM_READ(&time_update));
     // Don't update analog display value if just a time update. So it doesn't flicker
     if (PT_SEM_READ(&time_update)) {
       PT_SEM_CLEAR(&time_update);
     } else {
       analog1 = analog_reading;
+      // Set new pulse width value
       t2_compare = 250 + (1000*analog1/4095); //250..1250
-      TIM2->CCR2 = t2_compare;
+      TIM2->CCR2 = t2_compare; // preload CCR2. Shadow register will be loaded at next timer update event (UEV)
     }
   }
   PT_END(pt);
@@ -172,7 +182,7 @@ extern "C" {
  * Initialise ADC1 to convert PA0
  */
 void init_adc() {
-  // Setup ADC prescalar to ADCPRE[1:0]=10. PCLK2/6 = 72/6 = 12 MHz must be <= 14 Mhz
+  // Setup ADC prescalar to ADCPRE[1:0]=10. PCLK2/6 = 72/6 = 12 MHz (must be <= 14 Mhz)
   RCC->CFGR &= ~(RCC_CFGR_ADCPRE_0);
   RCC->CFGR |= RCC_CFGR_ADCPRE_1;
   // Enable ADC1 clock
@@ -227,11 +237,12 @@ void init_adc() {
  * Initialise TMR2 - To output a 20Hz PWM square wave with variable pulse width
  * Servo PWM
  *   50Hz = 20ms
- *   Center pulse width = 1.5ms
+ *   Center servo pulse width = 1.5ms
  *   Pulse width range: ~0.5ms..2.5ms
  *   ADC1 12-bits. range: 0..4095
  *   Use 10,000 cycles = 0.5 wave length = 10ms
  *   PSC = 10ms * 72MHz / 10000 = 72
+ *   CCR2 sets pulse width 250..1250 = 0.5ms..2.5ms
  */
 void init_tmr2() {
   // Enable timer clock
@@ -260,12 +271,12 @@ void init_tmr2() {
   TIM2->CCER |= TIM_CCER_CC2E;
 
   // PWM=20Hz 20ms period. pulse 0.5..2.5ms. ADC 0..4095
-  // PSC = 10ms * 72MHz / 10,000 = 72
-  // 1000 cycles = 1ms
+  // Prescalar count PSC = 10ms * 72MHz / 10,000 = 72
+  // 1000 CNT_CLK cycles = 1ms
   TIM2->PSC = 71;
   TIM2->ARR = 10000;
   TIM2->CCR2 = 250 + 500; // 1.5ms pulse @ 50Hz
-  // Set TIM2->EGR UG=1 to trigger shadow register load from preloaded regs. H/W will reset
+  // Set EGR UG=1 to trigger shadow register load from preloaded regs. H/W will reset UG
   TIM2->EGR |= TIM_EGR_UG;
 
   // Set PA1 to Alt function T2C2 output.

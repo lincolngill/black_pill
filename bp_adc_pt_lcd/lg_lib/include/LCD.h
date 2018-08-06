@@ -25,14 +25,6 @@
 #define LCD_RS_PIN      7
 #define LCD_RS_PORT     GPIOB
 
-#define LCD_SET_PIN(GPIOx,Pinx)    (GPIOx->BSRR |= 1<<Pinx)
-#define LCD_RESET_PIN(GPIOx,Pinx)  (GPIOx->BRR |= 1<<Pinx)
-
-#define LCD_SET_RS       LCD_SET_PIN(LCD_RS_PORT,LCD_RS_PIN)
-#define LCD_RESET_RS     LCD_RESET_PIN(LCD_RS_PORT,LCD_RS_PIN)
-#define LCD_SET_ENABLE   LCD_SET_PIN(LCD_ENABLE_PORT,LCD_ENABLE_PIN)
-#define LCD_RESET_ENABLE LCD_RESET_PIN(LCD_ENABLE_PORT,LCD_ENABLE_PIN)
-
 #define LCD_CGRAM_ADDR 0x40
 
 /**
@@ -125,9 +117,6 @@
 
 namespace lcd {
   static struct pt pt_init, pt_send, pt_printstr, pt_locate;
-  void configPin(GPIO_TypeDef * port, uint8_t pin, uint8_t cnf_and_mode);
-  void configPins(void);
-  uint32_t read4BitData(void);
   void write4BitData(uint8_t data);
   PT_THREAD (send(struct pt *pt, uint8_t byte_to_send, uint8_t rs, uint8_t post_delay));
   PT_THREAD (init(struct pt *pt));
