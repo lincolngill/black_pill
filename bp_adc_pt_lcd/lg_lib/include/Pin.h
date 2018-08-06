@@ -13,6 +13,7 @@
 #define PIN_ANALOG_INPUT        0b0000
 #define PIN_OPENDRAIN_OUTPUT_50 0b0111
 #define PIN_PUSHPULL_OUTPUT_50  0b0011
+#define PIN_ALTFN_OUTPUT_PP     0b1011
 
 class Pin {
     GPIO_TypeDef * port;

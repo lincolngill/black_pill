@@ -10,7 +10,7 @@
  *   PA10 - D6
  *   PB15 - D7
  */
-#define VERSION 5
+#define VERSION 6
 
 //#include "diag/Trace.h"
 #include <LCD.h>
@@ -31,6 +31,7 @@ static struct pt pt_tick, pt_led, pt_lcd_driver;
 static struct pt_sem time_update;
 static uint16_t analog1 = 0;
 static uint16_t analog_reading = 0;
+static uint16_t t2_compare = 0;
 
 /**
  * onboard LED PB12
@@ -63,7 +64,7 @@ static PT_THREAD (protothread_led(struct pt *pt)) {
   PT_BEGIN(pt);
   while (1) {
     led.toggle();
-    PT_YIELD_TIME_msec(pt, 150);
+    PT_YIELD_TIME_msec(pt, 500);
   }
   PT_END(pt);
 }
@@ -99,13 +100,19 @@ static PT_THREAD (protothread_lcd(struct pt *pt)) {
     //seconds = running_secs;
     //p = gmtime(&seconds);
     //sprintf(text_buffer, "%03d %02d:%02d:%02d",p->tm_yday, p->tm_hour, p->tm_min, p->tm_sec);
-    sprintf(text_buffer, "%4d %6ds", analog1, running_secs);
+    sprintf(text_buffer, "%4d %4d %5ds", analog1, t2_compare, running_secs);
     PT_LCD_PRINTSTR(pt, text_buffer);
     //PT_SEM_WAIT(pt, &time_update);
     // Wait for reading out of band or update in time
     PT_WAIT_UNTIL(pt, analog_reading < analog1-ADC_TOLERANCE || analog_reading > analog1+ADC_TOLERANCE || PT_SEM_READ(&time_update));
     // Don't update analog display value if just a time update. So it doesn't flicker
-    (PT_SEM_READ(&time_update)) ? PT_SEM_CLEAR(&time_update) : analog1 = analog_reading;
+    if (PT_SEM_READ(&time_update)) {
+      PT_SEM_CLEAR(&time_update);
+    } else {
+      analog1 = analog_reading;
+      t2_compare = 250 + (1000*analog1/4095); //250..1250
+      TIM2->CCR2 = t2_compare;
+    }
   }
   PT_END(pt);
 }
@@ -128,7 +135,7 @@ void init_tmr() {
   // OC preload enable OC1PE=1
   TIM1->CCMR1 |= TIM_CCMR1_OC1PE;
   // OC fast enable OC1FE=1
-  TIM1->CCMR1 |= TIM_CCMR1_OC1FE;
+  //TIM1->CCMR1 |= TIM_CCMR1_OC1FE;
   // CC1 output capture enable CC1E=1
   TIM1->CCER |= TIM_CCER_CC1E;
   // main output enable
@@ -216,6 +223,58 @@ void init_adc() {
   // Temperature sensor: ADCx_IN16. Sample time = 17.1us. ADC_CR2->TSVREFE=1 (ADCx_IN17 Vrefint)
 }
 
+/**
+ * Initialise TMR2 - To output a 20Hz PWM square wave with variable pulse width
+ * Servo PWM
+ *   50Hz = 20ms
+ *   Center pulse width = 1.5ms
+ *   Pulse width range: ~0.5ms..2.5ms
+ *   ADC1 12-bits. range: 0..4095
+ *   Use 10,000 cycles = 0.5 wave length = 10ms
+ *   PSC = 10ms * 72MHz / 10000 = 72
+ */
+void init_tmr2() {
+  // Enable timer clock
+  RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+  // Select internal clock CK_INT 72MHz.
+  //   TIM2->SMCR ECE=0 External clock disabled
+  //   SMS[2:0]=0 Slave mode disabled. Prescalar clocked from internal clock
+
+  // Set auto-reload preload enabled. ARPE=1
+  TIM2->CR1 |= TIM_CR1_ARPE;
+  // Set center aligned mode. CMS=11. Compare interrupts flags set on both up and down counting.
+  TIM2->CR1 |= TIM_CR1_CMS;
+
+  // Set CC2 to output (default). CC2S=0
+  TIM2->CCMR1 &= ~(TIM_CCMR1_CC2S);
+  // Set output compare 2 mode. OC2M=0b110 PWM 1. With CMS=11 then:
+  //   Count UP:   (CNT < CCR2) ? CC2=actve : inactive   --|__
+  //   Count DOWN: (CNT > CCR2) ? CC2=inactive  : active      __|--
+  TIM2->CCMR1 |= TIM_CCMR1_OC2M;
+  TIM2->CCMR1 &= ~(TIM_CCMR1_OC2M_0);
+  // OC preload enable OC2PE=1
+  TIM2->CCMR1 |= TIM_CCMR1_OC2PE;
+  // OC fast enable OC2FE=1
+  TIM2->CCMR1 |= TIM_CCMR1_OC2FE;
+  // CC2 output capture enable CC2E=1
+  TIM2->CCER |= TIM_CCER_CC2E;
+
+  // PWM=20Hz 20ms period. pulse 0.5..2.5ms. ADC 0..4095
+  // PSC = 10ms * 72MHz / 10,000 = 72
+  // 1000 cycles = 1ms
+  TIM2->PSC = 71;
+  TIM2->ARR = 10000;
+  TIM2->CCR2 = 250 + 500; // 1.5ms pulse @ 50Hz
+  // Set TIM2->EGR UG=1 to trigger shadow register load from preloaded regs. H/W will reset
+  TIM2->EGR |= TIM_EGR_UG;
+
+  // Set PA1 to Alt function T2C2 output.
+  Pin::config(GPIOA, 1, PIN_ALTFN_OUTPUT_PP);
+
+  // Enable the counter CR1 CEN=1
+  TIM2->CR1 |= TIM_CR1_CEN;
+}
+
 int main(int argc, char* argv[]) {
   PT_SETUP();
   PT_INIT(&pt_tick);
@@ -223,6 +282,7 @@ int main(int argc, char* argv[]) {
   PT_INIT(&pt_led);
   init_adc();
   init_tmr();
+  init_tmr2();
   // Schedule threads
   while (1) {
     PT_SCHEDULE(protothread_tick(&pt_tick));
