@@ -13,7 +13,7 @@
  *   PB15 - D7
  *
  *   PA0 - Analog input <- 10k pot
- *   PA1 - TIM2 OC2 (T2C2) output. 20Hz PWM Servo control
+ *   PA1 - TIM2 OC2 (T2C2) output. 50Hz PWM Servo control
  *
  *   TIM1 - Setup for 10Hz to trigger ADC1 every 100ms
  *   TIM2 - Setup for 50Hz PWM servo output. Pulse = 0.5ms..2.5ms
@@ -234,7 +234,7 @@ void init_adc() {
 }
 
 /**
- * Initialise TMR2 - To output a 20Hz PWM square wave with variable pulse width
+ * Initialise TMR2 - To output a 50Hz PWM square wave with variable pulse width
  * Servo PWM
  *   50Hz = 20ms
  *   Center servo pulse width = 1.5ms
@@ -270,7 +270,7 @@ void init_tmr2() {
   // CC2 output capture enable CC2E=1
   TIM2->CCER |= TIM_CCER_CC2E;
 
-  // PWM=20Hz 20ms period. pulse 0.5..2.5ms. ADC 0..4095
+  // PWM=50Hz 20ms period. pulse 0.5..2.5ms. ADC 0..4095
   // Prescalar count PSC = 10ms * 72MHz / 10,000 = 72
   // 1000 CNT_CLK cycles = 1ms
   TIM2->PSC = 71;
