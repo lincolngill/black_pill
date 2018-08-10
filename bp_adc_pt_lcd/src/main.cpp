@@ -4,6 +4,7 @@
  * Position a Servo using PWM output, based on analog input from a 10k pot
  *
  * PB12 --Onboard LED - Flashes
+ *
  * LCD Refer LCD.h/c - Protothread enabled LCD library
  *   PA6  - E  - Enable
  *   PA7  - RS - Register Select
@@ -16,10 +17,10 @@
  *   PA1 - TIM2 OC2 (T2C2) output. 50Hz PWM Servo control
  *
  *   TIM1 - Setup for 10Hz to trigger ADC1 every 100ms
- *   TIM2 - Setup for 50Hz PWM servo output. Pulse = 0.5ms..2.5ms
+ *   TIM2 - Setup for 50Hz PWM servo output. Pulse width = 0.5ms..2.5ms
  *
  */
-#define VERSION 10
+#define VERSION 11
 
 //#include "diag/Trace.h"
 #include <LCD.h>
@@ -37,8 +38,7 @@
 
 // Protothread structures
 static struct pt pt_tick, pt_led, pt_lcd_driver;
-static struct pt_sem time_update;
-static uint16_t analog1 = 0;
+static struct pt_sem lcd_update;
 static uint16_t analog_reading = 0;
 static uint16_t t2_compare = 0;
 
@@ -60,7 +60,7 @@ static PT_THREAD (protothread_tick(struct pt *pt)) {
   while (1) {
     PT_YIELD_TIME_msec(pt, 1000);
     running_secs++;
-    PT_SEM_SIGNAL(pt, &time_update);
+    PT_SEM_SIGNAL(pt, &lcd_update);
   }
   PT_END(pt);
 }
@@ -78,9 +78,8 @@ static PT_THREAD (protothread_led(struct pt *pt)) {
   PT_END(pt);
 }
 
-#define ADC_TOLERANCE 4
 /**
- * Thread to driver LCD output
+ * Thread to drive LCD output
  * \param[in] pt protothread pointer
  *
  * Updates LCD with ADC reading & running_secs
@@ -101,7 +100,7 @@ static PT_THREAD (protothread_lcd(struct pt *pt)) {
   sprintf(text_buffer, "%s %s", date, __TIME__);
   PT_LCD_PRINTSTR(pt,text_buffer);
   PT_YIELD_TIME_msec(pt,2000);
-  // Display ADC reading, Calculated CCR2 value and running seconds
+  // Display ADC and CCR2 readings
   PT_LCD_CLEARDISPLAY(pt);
   PT_LCD_PRINTSTR(pt,"ADC1:");
   while(1) {
@@ -109,26 +108,17 @@ static PT_THREAD (protothread_lcd(struct pt *pt)) {
     //seconds = running_secs;
     //p = gmtime(&seconds);
     //sprintf(text_buffer, "%03d %02d:%02d:%02d",p->tm_yday, p->tm_hour, p->tm_min, p->tm_sec);
-    sprintf(text_buffer, "%4d %4d %5ds", analog1, t2_compare, running_secs);
+    sprintf(text_buffer, "%4d %4d %5ds", analog_reading, t2_compare, running_secs);
     PT_LCD_PRINTSTR(pt, text_buffer);
-    // Wait for reading out of band or update in time
-    //PT_SEM_WAIT(pt, &time_update);
-    PT_WAIT_UNTIL(pt, analog_reading < analog1-ADC_TOLERANCE || analog_reading > analog1+ADC_TOLERANCE || PT_SEM_READ(&time_update));
-    // Don't update analog display value if just a time update. So it doesn't flicker
-    if (PT_SEM_READ(&time_update)) {
-      PT_SEM_CLEAR(&time_update);
-    } else {
-      analog1 = analog_reading;
-      // Set new pulse width value
-      t2_compare = 250 + (1000*analog1/4095); //250..1250
-      TIM2->CCR2 = t2_compare; // preload CCR2. Shadow register will be loaded at next timer update event (UEV)
-    }
+    // Wait for tick thread or ADC ISR to trigger an LCD update
+    PT_SEM_WAIT(pt, &lcd_update);
   }
   PT_END(pt);
 }
 
 /**
  * Initialise TMR1 - 10Hz (100ms period) PWM 50% duty. Using CC1 output
+ * Used to trigger ADC1 conversion
  */
 void init_tmr() {
   // Enable timer clock
@@ -166,20 +156,33 @@ void init_tmr() {
   TIM1->CR1 |= TIM_CR1_CEN;
 }
 
+#define COMPARE_THRESHOLD 8
 /**
  * ISR for ADC1 & 2 - Capture EOC value
+ * Capture the ADC conversion value
+ * Workout the CCR2 compare value. Update CCR2 if new value is changed by more than COMPARE_THRESHOLD
+ * Signal LCD to update if CCR2 value changes.
  * ISRs must be C functions otherwise the weak definition is not over written
  */
 extern "C" {
   void ADC1_2_IRQHandler(void) {
+    uint16_t t2_compare_new;
     if (ADC1->SR & ADC_SR_EOC) {
       analog_reading = ADC1->DR & 0xFFFF;
+      // New compare value
+      t2_compare_new = 250 +(1000*analog_reading/4095); //250..1250
+      if (t2_compare_new < t2_compare-COMPARE_THRESHOLD || t2_compare_new > t2_compare+COMPARE_THRESHOLD) {
+        // If new compare value is significantly difference then update the value and trigger an LCD update
+        t2_compare = t2_compare_new;
+        TIM2->CCR2 = t2_compare; // preload CCR2. Shadow register will be loaded at next timer update event (UEV)
+        PT_SEM_SIGNAL(pt, &lcd_update);
+      }
     }
   }
 }
 
 /**
- * Initialise ADC1 to convert PA0
+ * Initialise ADC1 to convert PA0 - 10k pot
  */
 void init_adc() {
   // Setup ADC prescalar to ADCPRE[1:0]=10. PCLK2/6 = 72/6 = 12 MHz (must be <= 14 Mhz)
@@ -291,6 +294,7 @@ int main(int argc, char* argv[]) {
   PT_INIT(&pt_tick);
   PT_INIT(&pt_lcd_driver);
   PT_INIT(&pt_led);
+  PT_SEM_INIT(&lcd_update,0);
   init_adc();
   init_tmr();
   init_tmr2();
